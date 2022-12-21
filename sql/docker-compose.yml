@@ -1,0 +1,18 @@
+version: "3"
+
+services:
+  pagila:
+    image: postgres:13.2
+    container_name: pagila
+    environment:
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_USER: postgres
+    volumes:
+      - type: bind
+        source: ./pagila-schema.sql
+        target: /docker-entrypoint-initdb.d/1-pagila-schema.sql
+      - type: bind
+        source: ./pagila-data.sql
+        target: /docker-entrypoint-initdb.d/2-pagila-data.sql
+    ports:
+      - 5432:5432
