@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  airflow:
+    image: ${AIRFLOW_IMAGE}:${AIRFLOW_IMAGE_VERSION}
+    volumes:
+      - type: bind
+        source: ${HOST_DAGS_DIRECTORY}
+        target: ${CONTAINER_DAGS_DIRECTORY}
+      - type: bind
+        source: ${HOST_SCRIPTS_DIRECTORY}
+        target: ${CONTAINER_SCRIPTS_DIRECTORY}
+      - type: bind
+        source: ${HOST_DATA_DIRECTORY}
+        target: ${CONTAINER_DATA_DIRECTORY}
+    command: bash ${INIT_SCRIPT_PATH}
+    environment:
+      AIRFLOW_VAR_PATH_TO_DATA: ${CONTAINER_DATA_DIRECTORY}/${DATA_FILE_NAME}
+      AIRFLOW_VAR_COLUMN_NAMES: ${COLUMN_NAMES}
+    ports:
+      - ${HOST_PORT}:${CONTAINER_PORT}
