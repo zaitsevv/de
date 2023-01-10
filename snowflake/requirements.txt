@@ -1,0 +1,4 @@
+apache-airflow==2.5.0
+snowflake-connector-python==2.9.0
+pandas==1.5.2
+pyarrow==10.0.1
