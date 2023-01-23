@@ -1,0 +1,187 @@
+x-spark-common: &spark-common
+  image: ${SPARK_IMAGE}:${SPARK_IMAGE_VERSION}
+  entrypoint: ${SPARK_ENTRYPOINT}
+  user: ${SPARK_USER}
+
+x-spark-worker-common: &spark-worker-common
+  <<: *spark-common
+  build:
+    context: ${SPARK_BUILD_CONTEXT}
+    dockerfile: ${SPARK_WORKER_DOCKERFILE}
+  volumes:
+    - ${SPARK_HOST_DATA_DIRECTORY}:${SPARK_CONTAINER_DATA_DIRECTORY}
+  command:
+    - |
+      bash /opt/spark/sbin/start-worker.sh \
+          ${SPARK_MASTER_URL} \
+          --port ${SPARK_WORKER_PORT} \
+          --cores ${SPARK_WORKER_CORES} \
+          --memory ${SPARK_WORKER_MEMORY}
+      tail -f /dev/null
+  depends_on:
+    - spark-master
+
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE}:${AIRFLOW_IMAGE_VERSION}
+  environment: &airflow-common-environment
+    AIRFLOW__CORE__EXECUTOR: ${AIRFLOW_CONFIG_EXECUTOR}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_CONFIG_SQL_ALCHEMY_CONNECTION}
+    AIRFLOW__CELERY__RESULT_BACKEND: ${AIRFLOW_CONFIG_RESULT_BACKEND}
+    AIRFLOW__CELERY__BROKER_URL: ${AIRFLOW_CONFIG_BROKER_URL}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_CONFIG_FERNET_KEY}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_CONFIG_DAGS_PAUSED_AT_CREATION}
+    AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW_CONFIG_LOAD_EXAMPLES}
+    AIRFLOW__API__AUTH_BACKENDS: ${AIRFLOW_CONFIG_AUTH_BACKEND}
+
+    AIRFLOW_VAR_PATH_TO_HELSINKI_CITY_BIKES_DATA: ${AIRFLOW_VARIABLE_PATH_TO_HELSINKI_CITY_BIKES_DATA}
+    AIRFLOW_VAR_PATH_TO_HELSINKI_CITY_BIKES_FILE: ${AIRFLOW_VARIABLE_PATH_TO_HELSINKI_CITY_BIKES_FILE}
+    AIRFLOW_VAR_PATH_TO_SPARK_TASKS_DIRECTORY: ${AIRFLOW_VARIABLE_PATH_TO_SPARK_TASKS_DIRECTORY}
+    AIRFLOW_VAR_AWS_S3_BUCKET_NAME: ${AIRFLOW_VARIABLE_AWS_S3_BUCKET_NAME}
+    AIRFLOW_VAR_AWS_S3_DATA_OBJECT_KEY_PREFIX: ${AIRFLOW_VARIABLE_AWS_S3_DATA_OBJECT_KEY_PREFIX}
+    AIRFLOW_VAR_AWS_S3_METRICS_OBJECT_KEY_PREFIX: ${AIRFLOW_VARIABLE_AWS_S3_METRICS_OBJECT_KEY_PREFIX}
+
+    AIRFLOW_CONN_AWS_DEFAULT: ${AIRFLOW_CONNECTION_AWS_DEFAULT}
+    AIRFLOW_CONN_SPARK_DEFAULT: ${AIRFLOW_CONNECTION_SPARK_DEFAULT}
+  volumes:
+    - ${AIRFLOW_HOST_LOG_DIRECTORY}:${AIRFLOW_CONTAINER_LOG_DIRECTORY}
+    - ${AIRFLOW_HOST_DAGS_DIRECTORY}:${AIRFLOW_CONTAINER_DAGS_DIRECTORY}
+    - ${AIRFLOW_HOST_DATA_DIRECTORY}:${AIRFLOW_CONTAINER_DATA_DIRECTORY}
+  depends_on: &airflow-common-depends_on
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+x-airflow-worker-common: &airflow-worker-common
+  <<: *airflow-common
+  build:
+    context: ${AIRFLOW_BUILD_CONTEXT}
+    dockerfile: ${AIRFLOW_WORKER_DOCKERFILE}
+  command: ${AIRFLOW_WORKER_COMMAND}
+  healthcheck:
+    test: ${AIRFLOW_WORKER_HEALTHCHECK_TEST}
+    interval: ${AIRFLOW_WORKER_HEALTHCHECK_INTERVAL}
+    timeout: ${AIRFLOW_WORKER_HEALTHCHECK_TIMEOUT}
+    retries: ${AIRFLOW_WORKER_HEALTHCHECK_RETRIES}
+  depends_on:
+    <<: *airflow-common-depends_on
+    airflow-init:
+      condition: service_completed_successfully
+
+networks:
+  default:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.5.0.0/16
+          ip_range: 10.5.3.0/16
+          gateway: 10.5.0.1
+
+services:
+  localstack:
+    image: ${LOCALSTACK_IMAGE}:${LOCALSTACK_IMAGE_VERSION}
+    environment:
+      DOCKER_HOST: ${LOCALSTACK_DOCKER_HOST}
+      SERVICES: ${LOCALSTACK_SERVICES}
+      EAGER_SERVICE_LOADING: ${LOCALSTACK_EAGER_SERVICE_LOADING}
+      LAMBDA_DOCKER_NETWORK: ${LOCALSTACK_LAMBDA_DOCKER_NETWORK}
+    volumes:
+      - ${LOCALSTACK_HOST_DOCKER_SOCKET}:${LOCALSTACK_CONTAINER_DOCKER_SOCKET}
+    networks:
+      default:
+        ipv4_address: 10.5.0.2
+
+  postgres:
+    image: ${POSTGRES_IMAGE}:${POSTGRES_IMAGE_VERSION}
+    environment:
+      POSTGRES_USER: ${POSTGRES_AIRFLOW_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_AIRFLOW_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_AIRFLOW_DB}
+    healthcheck:
+      test: ${POSTGRES_HEALTHCHECK_TEST}
+      interval: ${POSTGRES_HEALTHCHECK_INTERVAL}
+      timeout: ${POSTGRES_HEALTHCHECK_TIMEOUT}
+      retries: ${POSTGRES_HEALTHCHECK_RETRIES}
+    networks:
+      default:
+        ipv4_address: 10.5.0.3
+
+  redis:
+    image: ${REDIS_IMAGE}:${REDIS_IMAGE_VERSION}
+    healthcheck:
+      test: ${REDIS_HEALTHCHECK_TEST}
+      interval: ${REDIS_HEALTHCHECK_INTERVAL}
+      timeout: ${REDIS_HEALTHCHECK_TIMEOUT}
+      retries: ${REDIS_HEALTHCHECK_RETRIES}
+    networks:
+      default:
+        ipv4_address: 10.5.0.4
+
+  spark-master:
+    <<: *spark-common
+    command:
+      - |
+        bash /opt/spark/sbin/start-master.sh
+        tail -f /dev/null
+    networks:
+      default:
+        ipv4_address: 10.5.1.1
+
+  spark-worker-1:
+    <<: *spark-worker-common
+    networks:
+      default:
+        ipv4_address: 10.5.1.2
+
+  airflow-init:
+    <<: *airflow-common
+    environment:
+      <<: *airflow-common-environment
+      _AIRFLOW_DB_UPGRADE: ${AIRFLOW_CONFIG_DB_UPGRADE}
+      _AIRFLOW_WWW_USER_CREATE: ${AIRFLOW_CONFIG_WWW_USER_CREATE}
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_CONFIG_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_CONFIG_WWW_USER_PASSWORD}
+    user: ${AIRFLOW_INIT_USER}
+    entrypoint: ${AIRFLOW_INIT_ENTRYPOINT}
+    command:
+      - |
+        chmod a+rw -R ${AIRFLOW_CONTAINER_LOG_DIRECTORY} ${AIRFLOW_CONTAINER_DAGS_DIRECTORY} ${AIRFLOW_CONTAINER_DATA_DIRECTORY}
+        bash /entrypoint version
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: ${AIRFLOW_WEBSERVER_COMMAND}
+    healthcheck:
+      test: ${AIRFLOW_WEBSERVER_HEALTHCHECK_TEST}
+      interval: ${AIRFLOW_WEBSERVER_HEALTHCHECK_INTERVAL}
+      timeout: ${AIRFLOW_WEBSERVER_HEALTHCHECK_TIMEOUT}
+      retries: ${AIRFLOW_WEBSERVER_HEALTHCHECK_RETRIES}
+    depends_on:
+      <<: *airflow-common-depends_on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      default:
+        ipv4_address: 10.5.2.1
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: ${AIRFLOW_SCHEDULER_COMMAND}
+    healthcheck:
+      test: ${AIRFLOW_SCHEDULER_HEALTHCHECK_TEST}
+      interval: ${AIRFLOW_SCHEDULER_HEALTHCHECK_INTERVAL}
+      timeout: ${AIRFLOW_SCHEDULER_HEALTHCHECK_TIMEOUT}
+      retries: ${AIRFLOW_SCHEDULER_HEALTHCHECK_RETRIES}
+    depends_on:
+      <<: *airflow-common-depends_on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      default:
+        ipv4_address: 10.5.2.2
+
+  airflow-worker-1:
+    <<: *airflow-worker-common
+    networks:
+      default:
+        ipv4_address: 10.5.2.3
